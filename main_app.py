@@ -266,62 +266,68 @@ def advanced_color_correction(image):
         print(f"高级色彩校正失败: {e}")
         return image
 
-# ===== 舌苔舌质分离功能（关键修复点）=====
+# ===== 舌苔舌质分离功能（全新重写，解决纯色块问题）=====
 def separate_tongue_coating(image):
     """
-    分离舌苔和舌质
-    返回: (舌苔区域PIL Image, 舌质区域PIL Image, 舌苔比例, 舌苔特征描述)
+    分离舌苔和舌质（优化版：保留原图颜色，背景变黑，实现图2的效果）
     """
     if not CV2_AVAILABLE:
         return image, image, 0.5, "无法分离（缺少cv2库）"
 
     try:
         img_array = np.array(image)
+        h, w = img_array.shape[:2]
         
-        # 1. 增加鲁棒性判断：如果图像太小或者通道不对，直接返回原图避免崩溃
-        if img_array.shape[0] < 10 or img_array.shape[1] < 10 or len(img_array.shape) != 3:
-            return image, image, 0.5, "图像尺寸或通道异常"
-
+        # 1. 转换到 HSV 空间
         hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
-        v_norm = hsv[:, :, 2] / 255.0
-        s_norm = hsv[:, :, 1] / 255.0
+        h_channel, s_channel, v_channel = cv2.split(hsv)
 
-        # 原有逻辑，提取掩码
-        coating_mask = (v_norm > 0.5) & (s_norm < 0.35)
-        body_mask = (s_norm > 0.2) & (v_norm > 0.3) & (v_norm < 0.85) & (~coating_mask)
+        # 2. 提取舌头主体掩码（排除嘴唇/背景阴影）
+        # 舌头通常饱和度较高，亮度不能太暗也不能过曝
+        _, mask_s = cv2.threshold(s_channel, 40, 255, cv2.THRESH_BINARY)
+        _, mask_v = cv2.threshold(v_channel, 230, 255, cv2.THRESH_BINARY_INV)
+        tongue_mask = cv2.bitwise_and(mask_s, mask_v)
+        
+        # 3. 形态学去噪，让边缘平滑
+        kernel = np.ones((5, 5), np.uint8)
+        tongue_mask = cv2.morphologyEx(tongue_mask, cv2.MORPH_CLOSE, kernel)
+        tongue_mask = cv2.morphologyEx(tongue_mask, cv2.MORPH_OPEN, kernel)
 
-        # 2. 形态学去噪（如果全部是噪点，我们就不处理，返回原图）
-        if CV2_AVAILABLE:
-            kernel = np.ones((3, 3), np.uint8)
-            coating_mask = cv2.morphologyEx(
-                coating_mask.astype(np.uint8), cv2.MORPH_OPEN, kernel
-            ).astype(bool)
-            body_mask = cv2.morphologyEx(
-                body_mask.astype(np.uint8), cv2.MORPH_OPEN, kernel
-            ).astype(bool)
+        # 4. 利用 Otsu 自适应阈值分离舌苔和舌质（比死板的0.5阈值好得多）
+        # 舌苔通常较亮（V高），舌质较暗/红（V低）
+        _, coating_mask_inv = cv2.threshold(v_channel, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # 限定在舌头主体内
+        coating_mask = cv2.bitwise_and(coating_mask_inv, tongue_mask)
+        body_mask = cv2.bitwise_and(cv2.bitwise_not(coating_mask_inv), tongue_mask)
 
-        # 3. 构建可视化图像
-        # 关键：使用白色背景（而不是黑色），或者保持原色，让展示不再是一坨纯色
-        coating_img_array = np.zeros_like(img_array) 
-        coating_img_array[coating_mask] = img_array[coating_mask]
+        # 再次形态学去噪
+        coating_mask = cv2.morphologyEx(coating_mask, cv2.MORPH_OPEN, kernel)
+        body_mask = cv2.morphologyEx(body_mask, cv2.MORPH_OPEN, kernel)
+
+        # 5. 构建最终图像（背景黑，舌苔/舌质保留原色）
+        # 关键：把不在掩码内的像素设为纯黑 [0,0,0]，而不是全部涂成蓝色/纯色
+        coating_img_array = np.zeros_like(img_array)
+        coating_img_array[coating_mask > 0] = img_array[coating_mask > 0]
         
         body_img_array = np.zeros_like(img_array)
-        body_img_array[body_mask] = img_array[body_mask]
+        body_img_array[body_mask > 0] = img_array[body_mask > 0]
 
         coating_img = Image.fromarray(coating_img_array)
         body_img = Image.fromarray(body_img_array)
 
-        total_pixels = np.sum(coating_mask) + np.sum(body_mask)
-        coating_ratio = np.sum(coating_mask) / total_pixels if total_pixels > 0 else 0.5
+        # 6. 计算比例
+        total_pixels = np.sum(tongue_mask > 0)
+        coating_pixels = np.sum(coating_mask > 0)
+        coating_ratio = coating_pixels / total_pixels if total_pixels > 0 else 0.5
         coating_ratio = min(0.95, max(0.05, coating_ratio))
 
-        # 4. 特征描述（保证数据不出错）
-        if np.sum(coating_mask) > 100:
-            coating_pixels = img_array[coating_mask]
-            mean_r = np.mean(coating_pixels[:, 0])
-            mean_g = np.mean(coating_pixels[:, 1])
-            mean_b = np.mean(coating_pixels[:, 2])
-
+        # 7. 生成文字描述
+        if coating_pixels > 100:
+            coating_rgb = img_array[coating_mask > 0]
+            mean_r = np.mean(coating_rgb[:, 0])
+            mean_g = np.mean(coating_rgb[:, 1])
+            mean_b = np.mean(coating_rgb[:, 2])
             if mean_r > mean_g + 20 and mean_r > mean_b + 20:
                 coating_color = "偏黄"
             elif mean_g > mean_r + 10 and mean_g > mean_b + 10:
@@ -333,11 +339,11 @@ def separate_tongue_coating(image):
         else:
             coating_color = "较少或无"
 
-        if np.sum(body_mask) > 100:
-            body_pixels = img_array[body_mask]
-            body_r = np.mean(body_pixels[:, 0])
-            body_g = np.mean(body_pixels[:, 1])
-            body_b = np.mean(body_pixels[:, 2])
+        if np.sum(body_mask > 0) > 100:
+            body_rgb = img_array[body_mask > 0]
+            body_r = np.mean(body_rgb[:, 0])
+            body_g = np.mean(body_rgb[:, 1])
+            body_b = np.mean(body_rgb[:, 2])
             if body_r > body_g * 1.2 and body_r > body_b * 1.2:
                 body_color = "偏红"
             elif body_r < body_g * 0.85 and body_r < body_b * 0.85:
@@ -350,6 +356,7 @@ def separate_tongue_coating(image):
         coating_description = (
             f"舌苔：{coating_color}，覆盖比例 {coating_ratio*100:.1f}%；舌质：{body_color}"
         )
+
         return coating_img, body_img, coating_ratio, coating_description
 
     except Exception as e:
@@ -414,13 +421,12 @@ DIAGNOSIS_MAP = {
     }
 }
 
-# ===== 高精度舌象识别算法（修复NaN问题）=====
+# ===== 高精度舌象识别算法（解决NaN问题）=====
 def extract_tongue_color_features(image, coating_ratio=None, coating_description=None):
     try:
         img_array = np.array(image)
         h_img, w_img = img_array.shape[:2]
         crop_size = min(h_img, w_img) // 3
-        # 保证中心块大小至少为10，防止空数组
         crop_size = max(10, crop_size)
         
         cy, cx = h_img // 2, w_img // 2
@@ -429,7 +435,6 @@ def extract_tongue_color_features(image, coating_ratio=None, coating_description
             cx - crop_size // 2: cx + crop_size // 2
         ]
 
-        # 极其关键：防止0均值导致的NaN
         if center.size == 0:
             return "Thin-White", 0.75, {"错误": "提取区域为空"}
 
@@ -513,7 +518,7 @@ def extract_tongue_color_features(image, coating_ratio=None, coating_description
         return "Thin-White", 0.75, {}
 
 # ==============================================
-# ========== 【新增 ONNX 推理模块】 ==========
+# ========== 【ONNX 推理模块】 ==========
 # ==============================================
 IMG_SIZE = 640
 
@@ -529,10 +534,10 @@ def load_onnx_model():
 def onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45):
     session, input_name = load_onnx_model()
     
-    # 修复1：不要用 cv2.imread，中文路径会失败，改用 PIL 读取并转换
+    # 修复：使用 PIL 读取防止中文路径失败
     try:
         pil_img = Image.open(image_path).convert('RGB')
-        img = np.array(pil_img)[:, :, ::-1].copy() # RGB -> BGR
+        img = np.array(pil_img)[:, :, ::-1].copy()
     except Exception as e:
         st.error(f"图片读取失败: {e}")
         return []
@@ -579,16 +584,17 @@ def onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45):
                 )
     return det_list
 
-# ===== 舌象分析核心函数 =====
+# ===== 舌象分析核心函数（已修改裁剪逻辑）=====
 def analyze_tongue(image_path, enable_color_correction=True, enable_coating_separation=True):
     try:
         img = Image.open(image_path).convert("RGB")
         width, height = img.size
 
-        # 白平衡校正
+        # 1. 先在全图进行白平衡（保证后续裁剪的亮度一致性）
         if enable_color_correction and CV2_AVAILABLE:
             img = advanced_color_correction(img)
 
+        # 2. 运行 ONNX 检测
         det_list = onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45)
         best_box, best_conf, all_boxes = None, 0.0, []
 
@@ -604,24 +610,33 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
                 if conf > best_conf:
                     best_conf, best_box = conf, xyxy
 
+        # 3. 关键修改：内缩裁剪，截取舌头中心（解决右侧特写错乱问题）
         if best_box is not None:
             x1, y1, x2, y2 = map(int, best_box)
-            tongue_y1, tongue_y2 = y1 + (y2 - y1) // 2, y2
-            tongue_x1, tongue_x2 = x1, x2
+            box_w = x2 - x1
+            box_h = y2 - y1
+            
+            # 将检测框向内缩进，横向上取中间70%，纵向上取中间60%
+            # 这样可以排除掉上下唇和周围阴影
+            crop_w_start = x1 + int(box_w * 0.15)
+            crop_w_end = x2 - int(box_w * 0.15)
+            crop_h_start = y1 + int(box_h * 0.20)
+            crop_h_end = y2 - int(box_h * 0.20)
+            
+            tongue_x1, tongue_y1, tongue_x2, tongue_y2 = crop_w_start, crop_h_start, crop_w_end, crop_h_end
         else:
-            margin_w, margin_h = int(width * 0.2), int(height * 0.2)
+            margin_w, margin_h = int(width * 0.25), int(height * 0.25)
             tongue_x1, tongue_x2 = margin_w, width - margin_w
             tongue_y1, tongue_y2 = margin_h, height - margin_h
 
         tongue_x1, tongue_y1 = max(0, tongue_x1), max(0, tongue_y1)
         tongue_x2, tongue_y2 = min(width, tongue_x2), min(height, tongue_y2)
-        if tongue_x1 >= tongue_x2:
-            tongue_x2 = tongue_x1 + 10
-        if tongue_y1 >= tongue_y2:
-            tongue_y2 = tongue_y1 + 10
+        if tongue_x1 >= tongue_x2: tongue_x2 = tongue_x1 + 10
+        if tongue_y1 >= tongue_y2: tongue_y2 = tongue_y1 + 10
 
         cropped_img = img.crop((tongue_x1, tongue_y1, tongue_x2, tongue_y2))
 
+        # 4. 舌苔舌质分离
         coating_ratio = None
         coating_description = None
         coating_img_base64 = None
@@ -633,20 +648,18 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
 
             buffered_coating = BytesIO()
             coating_img.save(buffered_coating, format="PNG")
-            coating_img_base64 = base64.b64encode(
-                buffered_coating.getvalue()
-            ).decode()
+            coating_img_base64 = base64.b64encode(buffered_coating.getvalue()).decode()
 
             buffered_body = BytesIO()
             body_img.save(buffered_body, format="PNG")
-            body_img_base64 = base64.b64encode(
-                buffered_body.getvalue()
-            ).decode()
+            body_img_base64 = base64.b64encode(buffered_body.getvalue()).decode()
 
+        # 5. 提取特征
         tongue_type, confidence, feature_info = extract_tongue_color_features(
             cropped_img, coating_ratio, coating_description
         )
 
+        # 6. 画框可视化
         draw_img = img.copy()
         draw = ImageDraw.Draw(draw_img)
         draw.rectangle(
@@ -673,9 +686,7 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
 
         buffered_crop = BytesIO()
         cropped_img.save(buffered_crop, format="PNG")
-        tongue_region_base64 = base64.b64encode(
-            buffered_crop.getvalue()
-        ).decode()
+        tongue_region_base64 = base64.b64encode(buffered_crop.getvalue()).decode()
 
         diagnosis_info = DIAGNOSIS_MAP.get(
             tongue_type,
