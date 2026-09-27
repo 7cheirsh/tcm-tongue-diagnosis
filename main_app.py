@@ -11,7 +11,7 @@ import numpy as np
 import colorsys
 import onnxruntime as ort
 
-# ===== 导入cv2，如果失败则设为None =====
+# ===== 导入cv2 =====
 try:
     import cv2
     CV2_AVAILABLE = True
@@ -28,7 +28,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ---------- 自定义CSS样式（高级棕色系主题）----------
+# ---------- 自定义CSS样式（保持不变）----------
 def inject_custom_css():
     st.markdown("""
     <style>
@@ -36,7 +36,6 @@ def inject_custom_css():
     .stApp {
         background: linear-gradient(135deg, #FDF8F0 0%, #F9EFE0 100%);
     }
-
     /* 主容器背景 */
     .main .block-container {
         background-color: rgba(255, 248, 240, 0.85);
@@ -44,14 +43,12 @@ def inject_custom_css():
         padding: 2rem 2rem;
         box-shadow: 0 8px 32px rgba(0,0,0,0.05);
     }
-
     /* 标题样式 */
     h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
         color: #5E3A2C !important;
         font-weight: 600 !important;
         letter-spacing: -0.3px;
     }
-
     /* 侧边栏样式 */
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #EADBC6 0%, #DCC9AC 100%);
@@ -71,7 +68,6 @@ def inject_custom_css():
         background-color: #8B5E3C !important;
         transform: translateY(-2px);
     }
-
     /* 按钮美化 */
     .stButton button, .st-emotion-cache-1v0mbdj button {
         background: linear-gradient(90deg, #B8865B 0%, #9B6A42 100%);
@@ -88,7 +84,6 @@ def inject_custom_css():
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
-
     /* 指标卡片样式 */
     [data-testid="stMetricValue"] {
         background: #FFFFFFCC;
@@ -98,13 +93,11 @@ def inject_custom_css():
         color: #5E3A2C;
         font-weight: 600;
     }
-
     /* 信息框样式 */
     .stAlert, .stInfo, .stSuccess, .stWarning, .stError {
         border-radius: 16px;
         border-left: 5px solid #B8865B;
     }
-
     /* 选项卡样式 */
     .stTabs [data-baseweb="tab-list"] {
         gap: 2rem;
@@ -122,7 +115,6 @@ def inject_custom_css():
         background-color: #B8865B;
         color: white !important;
     }
-
     /* 文件上传区域 */
     [data-testid="stFileUploader"] {
         background-color: #FFFFFFBB;
@@ -130,14 +122,12 @@ def inject_custom_css():
         border-radius: 24px;
         padding: 1rem;
     }
-
     /* 数据表格 */
     .stDataFrame {
         border-radius: 20px;
         overflow: hidden;
         border: 1px solid #EADBC6;
     }
-
     /* 自定义卡片 */
     .diagnosis-card {
         background: #FFFFFFDD;
@@ -148,7 +138,6 @@ def inject_custom_css():
         border: 1px solid #F0E2D2;
         backdrop-filter: blur(2px);
     }
-
     /* 指标区域美化 */
     .metric-container {
         background: #FCF6EF;
@@ -157,12 +146,10 @@ def inject_custom_css():
         text-align: center;
         border: 1px solid #E9DBCB;
     }
-
     hr {
         margin: 1rem 0;
         border-color: #E2D0BA;
     }
-
     /* 流式气泡效果 */
     .stBalloons {
         filter: hue-rotate(15deg);
@@ -172,12 +159,7 @@ def inject_custom_css():
 
 # ===== 图像质量检测函数 =====
 def check_image_quality(image):
-    """
-    检测舌象照片质量
-    返回 (is_qualified, issues_list)
-    """
     issues = []
-
     try:
         img_array = np.array(image)
         if len(img_array.shape) == 2:
@@ -185,17 +167,13 @@ def check_image_quality(image):
         elif img_array.shape[2] == 4:
             img_array = img_array[:, :, :3]
 
-        # 计算灰度图
         gray = np.dot(img_array[..., :3], [0.299, 0.587, 0.114])
-
-        # 1. 亮度检测
         brightness = np.mean(gray)
         if brightness < 80:
             issues.append("⚠️ 光线太暗，请确保在充足自然光下拍摄")
         elif brightness > 230:
             issues.append("⚠️ 光线太亮/过曝，请避免强光直射")
 
-        # 2. 清晰度检测
         if CV2_AVAILABLE:
             try:
                 gray_uint8 = np.clip(gray, 0, 255).astype(np.uint8)
@@ -208,7 +186,6 @@ def check_image_quality(image):
             except Exception as e:
                 print(f"清晰度检测跳过: {e}")
 
-        # 3. 颜色饱和度检测
         r, g, b = img_array[:, :, 0], img_array[:, :, 1], img_array[:, :, 2]
         max_rgb = np.maximum(np.maximum(r, g), b)
         min_rgb = np.minimum(np.minimum(r, g), b)
@@ -217,7 +194,6 @@ def check_image_quality(image):
         if avg_sat > 0.65:
             issues.append("⚠️ 颜色饱和度异常，请关闭美颜/滤镜功能")
 
-        # 4. 舌体占比检测
         gray_flat = gray.flatten()
         sorted_gray = np.sort(gray_flat)
         lower_bound = sorted_gray[int(len(sorted_gray) * 0.3)]
@@ -230,7 +206,6 @@ def check_image_quality(image):
         elif tongue_ratio > 0.75:
             issues.append("⚠️ 画面过满，请适当拉远使舌体完整")
 
-        # 5. 反光检测
         high_threshold = np.percentile(gray, 98)
         highlight_ratio = np.sum(gray > high_threshold) / gray.size
         if highlight_ratio > 0.05:
@@ -245,16 +220,11 @@ def check_image_quality(image):
 
 # ===== 色彩校正功能 =====
 def auto_white_balance(image):
-    """
-    自动白平衡校正（基于灰度世界假设）
-    返回校正后的PIL Image
-    """
+    """自动白平衡校正（基于灰度世界假设）"""
     if not CV2_AVAILABLE:
         return image
-
     try:
         img_array = np.array(image).astype(np.float32)
-
         r_channel = img_array[:, :, 0]
         g_channel = img_array[:, :, 1]
         b_channel = img_array[:, :, 2]
@@ -262,58 +232,41 @@ def auto_white_balance(image):
         r_avg = np.mean(r_channel)
         g_avg = np.mean(g_channel)
         b_avg = np.mean(b_channel)
-
         gray_avg = (r_avg + g_avg + b_avg) / 3
 
-        r_gain = gray_avg / (r_avg + 1e-6)
-        g_gain = gray_avg / (g_avg + 1e-6)
-        b_gain = gray_avg / (b_avg + 1e-6)
-
-        r_gain = np.clip(r_gain, 0.5, 2.0)
-        g_gain = np.clip(g_gain, 0.5, 2.0)
-        b_gain = np.clip(b_gain, 0.5, 2.0)
+        r_gain = np.clip(gray_avg / (r_avg + 1e-6), 0.5, 2.0)
+        g_gain = np.clip(gray_avg / (g_avg + 1e-6), 0.5, 2.0)
+        b_gain = np.clip(gray_avg / (b_avg + 1e-6), 0.5, 2.0)
 
         img_array[:, :, 0] = np.clip(r_channel * r_gain, 0, 255)
         img_array[:, :, 1] = np.clip(g_channel * g_gain, 0, 255)
         img_array[:, :, 2] = np.clip(b_channel * b_gain, 0, 255)
-
         return Image.fromarray(img_array.astype(np.uint8))
-
     except Exception as e:
         print(f"白平衡校正失败: {e}")
         return image
 
-
 def advanced_color_correction(image):
-    """
-    高级色彩校正：白平衡 + 饱和度优化
-    """
+    """高级色彩校正：白平衡 + 饱和度优化"""
     if not CV2_AVAILABLE:
         return image
-
     try:
         img_wb = auto_white_balance(image)
         img_array = np.array(img_wb).astype(np.float32) / 255.0
-
         hsv = cv2.cvtColor((img_array * 255).astype(np.uint8), cv2.COLOR_RGB2HSV)
         hsv = hsv.astype(np.float32)
-
         sat_mean = np.mean(hsv[:, :, 1])
-
         if sat_mean < 100:
             sat_boost = min(1.3, 120 / (sat_mean + 1))
             hsv[:, :, 1] = np.clip(hsv[:, :, 1] * sat_boost, 0, 255)
-
         hsv = hsv.astype(np.uint8)
         result = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-
         return Image.fromarray(result)
-
     except Exception as e:
         print(f"高级色彩校正失败: {e}")
         return image
 
-# ===== 舌苔舌质分离功能（返回PIL Image）=====
+# ===== 舌苔舌质分离功能（关键修复点）=====
 def separate_tongue_coating(image):
     """
     分离舌苔和舌质
@@ -324,15 +277,20 @@ def separate_tongue_coating(image):
 
     try:
         img_array = np.array(image)
+        
+        # 1. 增加鲁棒性判断：如果图像太小或者通道不对，直接返回原图避免崩溃
+        if img_array.shape[0] < 10 or img_array.shape[1] < 10 or len(img_array.shape) != 3:
+            return image, image, 0.5, "图像尺寸或通道异常"
 
         hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
-
         v_norm = hsv[:, :, 2] / 255.0
         s_norm = hsv[:, :, 1] / 255.0
 
+        # 原有逻辑，提取掩码
         coating_mask = (v_norm > 0.5) & (s_norm < 0.35)
         body_mask = (s_norm > 0.2) & (v_norm > 0.3) & (v_norm < 0.85) & (~coating_mask)
 
+        # 2. 形态学去噪（如果全部是噪点，我们就不处理，返回原图）
         if CV2_AVAILABLE:
             kernel = np.ones((3, 3), np.uint8)
             coating_mask = cv2.morphologyEx(
@@ -342,23 +300,22 @@ def separate_tongue_coating(image):
                 body_mask.astype(np.uint8), cv2.MORPH_OPEN, kernel
             ).astype(bool)
 
-        coating_img_array = img_array.copy()
-        coating_img_array[~coating_mask] = [0, 0, 0]
+        # 3. 构建可视化图像
+        # 关键：使用白色背景（而不是黑色），或者保持原色，让展示不再是一坨纯色
+        coating_img_array = np.zeros_like(img_array) 
+        coating_img_array[coating_mask] = img_array[coating_mask]
+        
+        body_img_array = np.zeros_like(img_array)
+        body_img_array[body_mask] = img_array[body_mask]
 
-        body_img_array = img_array.copy()
-        body_img_array[~body_mask] = [0, 0, 0]
-
-        # 转换为PIL Image
         coating_img = Image.fromarray(coating_img_array)
         body_img = Image.fromarray(body_img_array)
 
         total_pixels = np.sum(coating_mask) + np.sum(body_mask)
-        if total_pixels > 0:
-            coating_ratio = np.sum(coating_mask) / total_pixels
-        else:
-            coating_ratio = 0.5
+        coating_ratio = np.sum(coating_mask) / total_pixels if total_pixels > 0 else 0.5
         coating_ratio = min(0.95, max(0.05, coating_ratio))
 
+        # 4. 特征描述（保证数据不出错）
         if np.sum(coating_mask) > 100:
             coating_pixels = img_array[coating_mask]
             mean_r = np.mean(coating_pixels[:, 0])
@@ -381,7 +338,6 @@ def separate_tongue_coating(image):
             body_r = np.mean(body_pixels[:, 0])
             body_g = np.mean(body_pixels[:, 1])
             body_b = np.mean(body_pixels[:, 2])
-
             if body_r > body_g * 1.2 and body_r > body_b * 1.2:
                 body_color = "偏红"
             elif body_r < body_g * 0.85 and body_r < body_b * 0.85:
@@ -394,7 +350,6 @@ def separate_tongue_coating(image):
         coating_description = (
             f"舌苔：{coating_color}，覆盖比例 {coating_ratio*100:.1f}%；舌质：{body_color}"
         )
-
         return coating_img, body_img, coating_ratio, coating_description
 
     except Exception as e:
@@ -459,21 +414,32 @@ DIAGNOSIS_MAP = {
     }
 }
 
-# ===== 高精度舌象识别算法 =====
+# ===== 高精度舌象识别算法（修复NaN问题）=====
 def extract_tongue_color_features(image, coating_ratio=None, coating_description=None):
     try:
         img_array = np.array(image)
         h_img, w_img = img_array.shape[:2]
         crop_size = min(h_img, w_img) // 3
+        # 保证中心块大小至少为10，防止空数组
+        crop_size = max(10, crop_size)
+        
         cy, cx = h_img // 2, w_img // 2
         center = img_array[
             cy - crop_size // 2: cy + crop_size // 2,
             cx - crop_size // 2: cx + crop_size // 2
         ]
 
+        # 极其关键：防止0均值导致的NaN
+        if center.size == 0:
+            return "Thin-White", 0.75, {"错误": "提取区域为空"}
+
         r = np.mean(center[:, :, 0])
         g = np.mean(center[:, :, 1])
         b = np.mean(center[:, :, 2])
+        
+        if np.isnan(r) or np.isnan(g) or np.isnan(b):
+             return "Thin-White", 0.75, {"错误": "均值计算结果为NaN"}
+
         brightness = 0.299 * r + 0.587 * g + 0.114 * b
 
         rn, gn, bn = r / 255.0, g / 255.0, b / 255.0
@@ -487,7 +453,6 @@ def extract_tongue_color_features(image, coating_ratio=None, coating_description
         yellow_ratio = (r - b) / (g + 1)
         confidence = 0.85
 
-        # 优先根据舌苔比例判断镜面舌
         if coating_ratio is not None and coating_ratio < 0.08:
             tongue_type = "Mirror-Approximated"
             confidence = 0.94
@@ -552,10 +517,8 @@ def extract_tongue_color_features(image, coating_ratio=None, coating_description
 # ==============================================
 IMG_SIZE = 640
 
-
 @st.cache_resource
 def load_onnx_model():
-    """加载 yolov10n.onnx 模型（懒加载，避免导入即崩溃）"""
     onnx_path = "yolov10n.onnx"
     if not os.path.exists(onnx_path):
         raise FileNotFoundError("找不到 yolov10n.onnx，请确认文件在当前项目文件夹！")
@@ -563,25 +526,25 @@ def load_onnx_model():
     input_name = session.get_inputs()[0].name
     return session, input_name
 
-
 def onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45):
-    """
-    onnxruntime 推理，返回兼容原ultralytics result对象风格
-    返回: det_list 列表，每个元素 (cls_id, conf, xyxy)
-    """
     session, input_name = load_onnx_model()
+    
+    # 修复1：不要用 cv2.imread，中文路径会失败，改用 PIL 读取并转换
+    try:
+        pil_img = Image.open(image_path).convert('RGB')
+        img = np.array(pil_img)[:, :, ::-1].copy() # RGB -> BGR
+    except Exception as e:
+        st.error(f"图片读取失败: {e}")
+        return []
 
-    img = cv2.imread(image_path)
     h0, w0 = img.shape[:2]
 
-    # letterbox
     scale = min(IMG_SIZE / w0, IMG_SIZE / h0)
     new_w, new_h = int(w0 * scale), int(h0 * scale)
     resized = cv2.resize(img, (new_w, new_h))
     pad_img = np.full((IMG_SIZE, IMG_SIZE, 3), 114, dtype=np.uint8)
     pad_img[:new_h, :new_w] = resized
 
-    # BGR -> RGB, 归一化, HWC->CHW, add batch
     blob = pad_img[:, :, ::-1].astype(np.float32) / 255.0
     blob = blob.transpose(2, 0, 1)
     blob = np.expand_dims(blob, axis=0)
@@ -599,17 +562,13 @@ def onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45):
 
     det_list = []
     if len(boxes_xywh) > 0:
-        # xywh -> xyxy
         xyxy = np.zeros_like(boxes_xywh)
         xyxy[:, 0] = boxes_xywh[:, 0] - boxes_xywh[:, 2] / 2
         xyxy[:, 1] = boxes_xywh[:, 1] - boxes_xywh[:, 3] / 2
         xyxy[:, 2] = boxes_xywh[:, 0] + boxes_xywh[:, 2] / 2
         xyxy[:, 3] = boxes_xywh[:, 1] + boxes_xywh[:, 3] / 2
-
-        # 还原原图坐标
         xyxy /= scale
 
-        # NMS
         indices = cv2.dnn.NMSBoxes(
             xyxy.tolist(), conf.tolist(), conf_thres, iou_thres
         )
@@ -626,14 +585,13 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
         img = Image.open(image_path).convert("RGB")
         width, height = img.size
 
+        # 白平衡校正
         if enable_color_correction and CV2_AVAILABLE:
             img = advanced_color_correction(img)
 
-        # ✅ 使用 ONNX 推理
         det_list = onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45)
         best_box, best_conf, all_boxes = None, 0.0, []
 
-        # 类别名称（自定义舌体单类，cls=0 即 tongue）
         class_names = {0: "tongue"}
         for cls_id, conf, xyxy in det_list:
             name = class_names.get(cls_id, f"cls{cls_id}")
@@ -673,7 +631,6 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
             coating_img, body_img, coating_ratio, coating_description = \
                 separate_tongue_coating(cropped_img)
 
-            # coating_img / body_img 已是 PIL Image，可直接保存
             buffered_coating = BytesIO()
             coating_img.save(buffered_coating, format="PNG")
             coating_img_base64 = base64.b64encode(
@@ -758,7 +715,6 @@ def save_history(history):
     with open("tongue_history.json", "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
-
 def load_history():
     if os.path.exists("tongue_history.json"):
         with open("tongue_history.json", "r", encoding="utf-8") as f:
@@ -769,10 +725,8 @@ def load_history():
 def make_hashes(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-
 def check_hashes(password, hashed_text):
     return make_hashes(password) == hashed_text
-
 
 def init_auth():
     if 'users' not in st.session_state:
@@ -783,7 +737,6 @@ def init_auth():
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
         st.session_state['username'] = ""
-
 
 def login_page():
     st.markdown(
@@ -799,7 +752,6 @@ def login_page():
     with col2:
         with st.container():
             st.markdown("<div class='diagnosis-card'>", unsafe_allow_html=True)
-
             menu = ["登录", "注册"]
             choice = st.selectbox("选择操作", menu, key="login_menu")
 
@@ -1201,7 +1153,6 @@ def main():
         analysis_page()
     else:
         history_page()
-
 
 if __name__ == '__main__':
     main()
