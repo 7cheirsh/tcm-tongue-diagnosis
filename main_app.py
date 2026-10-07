@@ -1,5 +1,4 @@
 import streamlit as st
-st.write("### VERSION-CHECK-2026-10-07")
 import hashlib
 import pandas as pd
 import base64
