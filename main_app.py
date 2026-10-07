@@ -251,59 +251,81 @@ def advanced_color_correction(image):
         print(f"高级色彩校正失败: {e}")
         return image
 
-# ===== 舌苔舌质分离功能 =====
+# ===== 舌苔舌质分离功能（彩色叠加版）=====
 def separate_tongue_coating(image):
+    """
+    在舌体裁剪图上分离舌苔/舌质。
+    返回：coating_overlay(PIL), body_overlay(PIL), coating_ratio, description
+    叠加色：舌苔=绿色，舌质=红色，保留原图纹理。
+    """
     if not CV2_AVAILABLE:
         return image, image, 0.5, "无法分离（缺少cv2库）"
 
     try:
-        img_array = np.array(image)
-        if img_array.shape[0] < 20 or img_array.shape[1] < 20 or len(img_array.shape) != 3:
+        img_array = np.array(image.convert("RGB"))
+        H, W = img_array.shape[:2]
+        if H < 20 or W < 20:
             return image, image, 0.5, "图像尺寸或通道异常"
 
         hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
-        h_channel, s_channel, v_channel = cv2.split(hsv)
+        h_ch, s_ch, v_ch = cv2.split(hsv)
 
-        _, mask_s = cv2.threshold(s_channel, 40, 255, cv2.THRESH_BINARY)
-        _, mask_v = cv2.threshold(v_channel, 60, 255, cv2.THRESH_BINARY)
+        # 1) 提取舌头主体
+        _, mask_s = cv2.threshold(s_ch, 30, 255, cv2.THRESH_BINARY)
+        _, mask_v = cv2.threshold(v_ch, 50, 255, cv2.THRESH_BINARY)
         tongue_mask = cv2.bitwise_and(mask_s, mask_v)
+        k = np.ones((5, 5), np.uint8)
+        tongue_mask = cv2.morphologyEx(tongue_mask, cv2.MORPH_CLOSE, k)
+        tongue_mask = cv2.morphologyEx(tongue_mask, cv2.MORPH_OPEN, k)
 
-        kernel = np.ones((7, 7), np.uint8)
-        tongue_mask = cv2.morphologyEx(tongue_mask, cv2.MORPH_CLOSE, kernel)
-        tongue_mask = cv2.morphologyEx(tongue_mask, cv2.MORPH_OPEN, kernel)
+        # 掩码太小 → 认为整张图都是舌头
+        if np.sum(tongue_mask > 0) < 0.2 * H * W:
+            tongue_mask = np.full((H, W), 255, dtype=np.uint8)
 
-        _, coating_mask_temp = cv2.threshold(v_channel, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # 2) Otsu 在 V 通道区分舌苔（亮）vs 舌质（暗）
+        v_tongue = v_ch.copy()
+        v_tongue[tongue_mask == 0] = 0
+        _, coating_bin = cv2.threshold(v_tongue, 0, 255,
+                                       cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        coating_mask = cv2.bitwise_and(coating_bin, tongue_mask)
+        body_mask = cv2.bitwise_and(cv2.bitwise_not(coating_bin), tongue_mask)
 
-        coating_mask = cv2.bitwise_and(coating_mask_temp, tongue_mask)
-        body_mask = cv2.bitwise_and(cv2.bitwise_not(coating_mask_temp), tongue_mask)
+        # 3) 形态学去噪
+        k2 = np.ones((5, 5), np.uint8)
+        coating_mask = cv2.morphologyEx(coating_mask, cv2.MORPH_OPEN, k2)
+        coating_mask = cv2.morphologyEx(coating_mask, cv2.MORPH_CLOSE, k2)
+        body_mask = cv2.morphologyEx(body_mask, cv2.MORPH_OPEN, k2)
+        body_mask = cv2.morphologyEx(body_mask, cv2.MORPH_CLOSE, k2)
 
-        coating_mask = cv2.morphologyEx(coating_mask, cv2.MORPH_OPEN, kernel)
-        body_mask = cv2.morphologyEx(body_mask, cv2.MORPH_OPEN, kernel)
+        # 4) 彩色叠加
+        def overlay(color_rgb, mask):
+            base = img_array.astype(np.float32)
+            color_layer = np.zeros_like(base)
+            color_layer[:, :] = np.array(color_rgb, dtype=np.float32)
+            alpha = (mask.astype(np.float32) / 255.0) * 0.55
+            alpha = np.expand_dims(alpha, axis=2)
+            out = base * (1 - alpha) + color_layer * alpha
+            out[mask == 0] = 0
+            return Image.fromarray(out.astype(np.uint8))
 
-        coating_img_array = np.zeros_like(img_array)
-        coating_img_array[coating_mask > 0] = img_array[coating_mask > 0]
+        coating_img = overlay([0, 200, 0],   coating_mask)   # 舌苔：绿
+        body_img    = overlay([220, 40, 40], body_mask)      # 舌质：红
 
-        body_img_array = np.zeros_like(img_array)
-        body_img_array[body_mask > 0] = img_array[body_mask > 0]
+        # 5) 比例
+        total = int(np.sum(tongue_mask > 0))
+        coat_px = int(np.sum(coating_mask > 0))
+        coating_ratio = coat_px / total if total > 0 else 0.5
+        coating_ratio = float(min(0.95, max(0.05, coating_ratio)))
 
-        coating_img = Image.fromarray(coating_img_array)
-        body_img = Image.fromarray(body_img_array)
-
-        total_tongue_pixels = np.sum(tongue_mask > 0)
-        coating_pixels = np.sum(coating_mask > 0)
-        coating_ratio = coating_pixels / total_tongue_pixels if total_tongue_pixels > 0 else 0.5
-        coating_ratio = min(0.95, max(0.05, coating_ratio))
-
-        if coating_pixels > 100:
-            coating_rgb = img_array[coating_mask > 0]
-            mean_r = np.mean(coating_rgb[:, 0])
-            mean_g = np.mean(coating_rgb[:, 1])
-            mean_b = np.mean(coating_rgb[:, 2])
-            if mean_r > mean_g + 20 and mean_r > mean_b + 20:
+        # 6) 颜色描述
+        if coat_px > 100:
+            c_rgb = img_array[coating_mask > 0]
+            mr, mg, mb = c_rgb[:, 0].mean(), c_rgb[:, 1].mean(), c_rgb[:, 2].mean()
+            if mr > mg + 20 and mr > mb + 20:
                 coating_color = "偏黄"
-            elif mean_g > mean_r + 10 and mean_g > mean_b + 10:
+            elif mg > mr + 10 and mg > mb + 10:
                 coating_color = "偏白"
-            elif mean_b > mean_g + 15 and mean_b > mean_r + 15:
+            elif mb > mg + 15 and mb > mr + 15:
                 coating_color = "偏灰"
             else:
                 coating_color = "薄白"
@@ -311,23 +333,20 @@ def separate_tongue_coating(image):
             coating_color = "较少或无"
 
         if np.sum(body_mask > 0) > 100:
-            body_rgb = img_array[body_mask > 0]
-            body_r = np.mean(body_rgb[:, 0])
-            body_g = np.mean(body_rgb[:, 1])
-            body_b = np.mean(body_rgb[:, 2])
-            if body_r > body_g * 1.2 and body_r > body_b * 1.2:
+            b_rgb = img_array[body_mask > 0]
+            br, bg, bb = b_rgb[:, 0].mean(), b_rgb[:, 1].mean(), b_rgb[:, 2].mean()
+            if br > bg * 1.2 and br > bb * 1.2:
                 body_color = "偏红"
-            elif body_r < body_g * 0.85 and body_r < body_b * 0.85:
+            elif br < bg * 0.85 and br < bb * 0.85:
                 body_color = "偏淡/偏白"
             else:
                 body_color = "淡红"
         else:
             body_color = "无法判断"
 
-        coating_description = (
-            f"舌苔：{coating_color}，覆盖比例 {coating_ratio*100:.1f}%；舌质：{body_color}"
-        )
-        return coating_img, body_img, coating_ratio, coating_description
+        desc = (f"舌苔：{coating_color}，覆盖比例 {coating_ratio*100:.1f}%；"
+                f"舌质：{body_color}")
+        return coating_img, body_img, coating_ratio, desc
 
     except Exception as e:
         print(f"舌苔舌质分离失败: {e}")
@@ -553,59 +572,6 @@ def onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45):
                 )
     return det_list
 
-# ===== 新增：舌体框精修函数 =====
-def refine_tongue_box(img_pil, best_box):
-    """
-    在 YOLO 检测框内，用 HSV 颜色 + 形态学重新定位舌头主体，
-    返回精修后的 (x1, y1, x2, y2)；若失败则回退到原始框。
-    """
-    if not CV2_AVAILABLE or best_box is None:
-        return best_box
-
-    try:
-        img = np.array(img_pil)
-        H, W = img.shape[:2]
-        x1, y1, x2, y2 = map(int, best_box)
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(W, x2), min(H, y2)
-        if x2 - x1 < 20 or y2 - y1 < 20:
-            return best_box
-
-        roi = img[y1:y2, x1:x2]
-        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
-        h, s, v = cv2.split(hsv)
-
-        # 舌头在 HSV 里一般是：H 偏红/粉（0-25 或 160-180），S 中高，V 中高
-        mask1 = cv2.inRange(hsv, (0,   40, 50), (25, 255, 255))
-        mask2 = cv2.inRange(hsv, (160, 40, 50), (180, 255, 255))
-        mask = cv2.bitwise_or(mask1, mask2)
-
-        # 排除过暗（嘴唇阴影、口腔深处）
-        _, v_mask = cv2.threshold(v, 60, 255, cv2.THRESH_BINARY)
-        mask = cv2.bitwise_and(mask, v_mask)
-
-        # 形态学：先开后闭
-        k = np.ones((7, 7), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  k)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
-
-        # 取最大连通域
-        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not cnts:
-            return best_box
-        cnt = max(cnts, key=cv2.contourArea)
-        if cv2.contourArea(cnt) < 0.05 * roi.shape[0] * roi.shape[1]:
-            return best_box
-
-        bx, by, bw, bh = cv2.boundingRect(cnt)
-        rx1, ry1 = x1 + bx, y1 + by
-        rx2, ry2 = x1 + bx + bw, y1 + by + bh
-        return [rx1, ry1, rx2, ry2]
-
-    except Exception as e:
-        print(f"舌体精修失败: {e}")
-        return best_box
-
 # ===== 舌象分析核心函数 =====
 def analyze_tongue(image_path, enable_color_correction=True, enable_coating_separation=True):
     try:
@@ -632,23 +598,17 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
                 if conf > best_conf:
                     best_conf, best_box = conf, xyxy
 
-        # 3. 核心：先精修舌体框，再按"舌头中间"裁剪
+        # 3. 以 YOLO 框中心为基准，取"舌头中间"裁剪
         if best_box is not None:
-            # 3.1 在 YOLO 框内用颜色重定位舌头主体
-            refined_box = refine_tongue_box(img, best_box)
-
-            # 3.2 融合：用精修框，但如果它异常小则退回原框
-            x1, y1, x2, y2 = map(int, refined_box)
+            x1, y1, x2, y2 = map(int, best_box)
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(width, x2), min(height, y2)
             bw, bh = x2 - x1, y2 - y1
-            if bw < 30 or bh < 30:
-                x1, y1, x2, y2 = map(int, best_box)
-                bw, bh = x2 - x1, y2 - y1
 
-            # 3.3 按"舌头中间"裁剪：
-            #     横向取中间 60%，纵向取中间 70%
+            # 取舌头正中间：横向 60%，纵向 60%
             cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
             crop_w = bw * 0.60
-            crop_h = bh * 0.70
+            crop_h = bh * 0.60
 
             tongue_x1 = int(max(0, cx - crop_w / 2))
             tongue_y1 = int(max(0, cy - crop_h / 2))
@@ -994,13 +954,13 @@ def analysis_page():
 
                         col_coat1, col_coat2 = st.columns(2)
                         with col_coat1:
-                            st.markdown("**👅 舌苔区域**")
+                            st.markdown("**🟢 舌苔区域（绿色标注）**")
                             st.image(
                                 f"data:image/png;base64,{result['coating_img_base64']}",
                                 width=300
                             )
                         with col_coat2:
-                            st.markdown("**❤️ 舌质区域**")
+                            st.markdown("**🔴 舌质区域（红色标注）**")
                             st.image(
                                 f"data:image/png;base64,{result['body_img_base64']}",
                                 width=300
