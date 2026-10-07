@@ -28,28 +28,24 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ---------- 自定义CSS样式（保持不变）----------
+# ---------- 自定义CSS样式 ----------
 def inject_custom_css():
     st.markdown("""
     <style>
-    /* 全局背景与字体 */
     .stApp {
         background: linear-gradient(135deg, #FDF8F0 0%, #F9EFE0 100%);
     }
-    /* 主容器背景 */
     .main .block-container {
         background-color: rgba(255, 248, 240, 0.85);
         border-radius: 20px;
         padding: 2rem 2rem;
         box-shadow: 0 8px 32px rgba(0,0,0,0.05);
     }
-    /* 标题样式 */
     h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
         color: #5E3A2C !important;
         font-weight: 600 !important;
         letter-spacing: -0.3px;
     }
-    /* 侧边栏样式 */
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #EADBC6 0%, #DCC9AC 100%);
         border-right: 1px solid #C9AD7A;
@@ -68,7 +64,6 @@ def inject_custom_css():
         background-color: #8B5E3C !important;
         transform: translateY(-2px);
     }
-    /* 按钮美化 */
     .stButton button, .st-emotion-cache-1v0mbdj button {
         background: linear-gradient(90deg, #B8865B 0%, #9B6A42 100%);
         color: white !important;
@@ -84,7 +79,6 @@ def inject_custom_css():
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
-    /* 指标卡片样式 */
     [data-testid="stMetricValue"] {
         background: #FFFFFFCC;
         padding: 0.2rem 0.6rem;
@@ -93,12 +87,10 @@ def inject_custom_css():
         color: #5E3A2C;
         font-weight: 600;
     }
-    /* 信息框样式 */
     .stAlert, .stInfo, .stSuccess, .stWarning, .stError {
         border-radius: 16px;
         border-left: 5px solid #B8865B;
     }
-    /* 选项卡样式 */
     .stTabs [data-baseweb="tab-list"] {
         gap: 2rem;
         background-color: #F5E8DA;
@@ -115,20 +107,17 @@ def inject_custom_css():
         background-color: #B8865B;
         color: white !important;
     }
-    /* 文件上传区域 */
     [data-testid="stFileUploader"] {
         background-color: #FFFFFFBB;
         border: 2px dashed #C9AD7A;
         border-radius: 24px;
         padding: 1rem;
     }
-    /* 数据表格 */
     .stDataFrame {
         border-radius: 20px;
         overflow: hidden;
         border: 1px solid #EADBC6;
     }
-    /* 自定义卡片 */
     .diagnosis-card {
         background: #FFFFFFDD;
         border-radius: 28px;
@@ -138,7 +127,6 @@ def inject_custom_css():
         border: 1px solid #F0E2D2;
         backdrop-filter: blur(2px);
     }
-    /* 指标区域美化 */
     .metric-container {
         background: #FCF6EF;
         border-radius: 24px;
@@ -150,7 +138,6 @@ def inject_custom_css():
         margin: 1rem 0;
         border-color: #E2D0BA;
     }
-    /* 流式气泡效果 */
     .stBalloons {
         filter: hue-rotate(15deg);
     }
@@ -264,11 +251,8 @@ def advanced_color_correction(image):
         print(f"高级色彩校正失败: {e}")
         return image
 
-# ===== 舌苔舌质分离功能（全新优化版） =====
+# ===== 舌苔舌质分离功能 =====
 def separate_tongue_coating(image):
-    """
-    分离舌苔和舌质（优化版：智能识别舌头主体，背景全黑，保留舌苔/舌质原色）
-    """
     if not CV2_AVAILABLE:
         return image, image, 0.5, "无法分离（缺少cv2库）"
 
@@ -280,42 +264,36 @@ def separate_tongue_coating(image):
         hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
         h_channel, s_channel, v_channel = cv2.split(hsv)
 
-        # 1. 提取舌头主体掩码
         _, mask_s = cv2.threshold(s_channel, 40, 255, cv2.THRESH_BINARY)
         _, mask_v = cv2.threshold(v_channel, 60, 255, cv2.THRESH_BINARY)
         tongue_mask = cv2.bitwise_and(mask_s, mask_v)
-        
-        # 2. 形态学去噪
+
         kernel = np.ones((7, 7), np.uint8)
         tongue_mask = cv2.morphologyEx(tongue_mask, cv2.MORPH_CLOSE, kernel)
         tongue_mask = cv2.morphologyEx(tongue_mask, cv2.MORPH_OPEN, kernel)
 
-        # 3. Otsu 自动阈值区分舌苔和舌质
         _, coating_mask_temp = cv2.threshold(v_channel, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
+
         coating_mask = cv2.bitwise_and(coating_mask_temp, tongue_mask)
         body_mask = cv2.bitwise_and(cv2.bitwise_not(coating_mask_temp), tongue_mask)
 
         coating_mask = cv2.morphologyEx(coating_mask, cv2.MORPH_OPEN, kernel)
         body_mask = cv2.morphologyEx(body_mask, cv2.MORPH_OPEN, kernel)
 
-        # 4. 构建最终图像（背景全黑，保留原色）
         coating_img_array = np.zeros_like(img_array)
         coating_img_array[coating_mask > 0] = img_array[coating_mask > 0]
-        
+
         body_img_array = np.zeros_like(img_array)
         body_img_array[body_mask > 0] = img_array[body_mask > 0]
 
         coating_img = Image.fromarray(coating_img_array)
         body_img = Image.fromarray(body_img_array)
 
-        # 5. 计算比例
         total_tongue_pixels = np.sum(tongue_mask > 0)
         coating_pixels = np.sum(coating_mask > 0)
         coating_ratio = coating_pixels / total_tongue_pixels if total_tongue_pixels > 0 else 0.5
         coating_ratio = min(0.95, max(0.05, coating_ratio))
 
-        # 6. 生成文字描述
         if coating_pixels > 100:
             coating_rgb = img_array[coating_mask > 0]
             mean_r = np.mean(coating_rgb[:, 0])
@@ -413,14 +391,14 @@ DIAGNOSIS_MAP = {
     }
 }
 
-# ===== 高精度舌象识别算法（解决NaN问题） =====
+# ===== 高精度舌象识别算法 =====
 def extract_tongue_color_features(image, coating_ratio=None, coating_description=None):
     try:
         img_array = np.array(image)
         h_img, w_img = img_array.shape[:2]
         crop_size = min(h_img, w_img) // 3
         crop_size = max(10, crop_size)
-        
+
         cy, cx = h_img // 2, w_img // 2
         center = img_array[
             cy - crop_size // 2: cy + crop_size // 2,
@@ -433,9 +411,9 @@ def extract_tongue_color_features(image, coating_ratio=None, coating_description
         r = np.mean(center[:, :, 0])
         g = np.mean(center[:, :, 1])
         b = np.mean(center[:, :, 2])
-        
+
         if np.isnan(r) or np.isnan(g) or np.isnan(b):
-             return "Thin-White", 0.75, {"错误": "均值计算结果为NaN"}
+            return "Thin-White", 0.75, {"错误": "均值计算结果为NaN"}
 
         brightness = 0.299 * r + 0.587 * g + 0.114 * b
 
@@ -525,8 +503,7 @@ def load_onnx_model():
 
 def onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45):
     session, input_name = load_onnx_model()
-    
-    # 修复：使用 PIL 读取防止中文路径失败
+
     try:
         pil_img = Image.open(image_path).convert('RGB')
         img = np.array(pil_img)[:, :, ::-1].copy()
@@ -576,17 +553,70 @@ def onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45):
                 )
     return det_list
 
-# ===== 舌象分析核心函数（完美框住舌头中间）=====
+# ===== 新增：舌体框精修函数 =====
+def refine_tongue_box(img_pil, best_box):
+    """
+    在 YOLO 检测框内，用 HSV 颜色 + 形态学重新定位舌头主体，
+    返回精修后的 (x1, y1, x2, y2)；若失败则回退到原始框。
+    """
+    if not CV2_AVAILABLE or best_box is None:
+        return best_box
+
+    try:
+        img = np.array(img_pil)
+        H, W = img.shape[:2]
+        x1, y1, x2, y2 = map(int, best_box)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(W, x2), min(H, y2)
+        if x2 - x1 < 20 or y2 - y1 < 20:
+            return best_box
+
+        roi = img[y1:y2, x1:x2]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+        h, s, v = cv2.split(hsv)
+
+        # 舌头在 HSV 里一般是：H 偏红/粉（0-25 或 160-180），S 中高，V 中高
+        mask1 = cv2.inRange(hsv, (0,   40, 50), (25, 255, 255))
+        mask2 = cv2.inRange(hsv, (160, 40, 50), (180, 255, 255))
+        mask = cv2.bitwise_or(mask1, mask2)
+
+        # 排除过暗（嘴唇阴影、口腔深处）
+        _, v_mask = cv2.threshold(v, 60, 255, cv2.THRESH_BINARY)
+        mask = cv2.bitwise_and(mask, v_mask)
+
+        # 形态学：先开后闭
+        k = np.ones((7, 7), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  k)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+
+        # 取最大连通域
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return best_box
+        cnt = max(cnts, key=cv2.contourArea)
+        if cv2.contourArea(cnt) < 0.05 * roi.shape[0] * roi.shape[1]:
+            return best_box
+
+        bx, by, bw, bh = cv2.boundingRect(cnt)
+        rx1, ry1 = x1 + bx, y1 + by
+        rx2, ry2 = x1 + bx + bw, y1 + by + bh
+        return [rx1, ry1, rx2, ry2]
+
+    except Exception as e:
+        print(f"舌体精修失败: {e}")
+        return best_box
+
+# ===== 舌象分析核心函数 =====
 def analyze_tongue(image_path, enable_color_correction=True, enable_coating_separation=True):
     try:
         img = Image.open(image_path).convert("RGB")
         width, height = img.size
 
-        # 1. 白平衡在整图上执行
+        # 1. 白平衡
         if enable_color_correction and CV2_AVAILABLE:
             img = advanced_color_correction(img)
 
-        # 2. 运行 ONNX 检测
+        # 2. ONNX 检测
         det_list = onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45)
         best_box, best_conf, all_boxes = None, 0.0, []
 
@@ -602,23 +632,35 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
                 if conf > best_conf:
                     best_conf, best_box = conf, xyxy
 
-        # 3. 核心：裁剪逻辑修改为内缩 25%，保证框住舌头中间
+        # 3. 核心：先精修舌体框，再按"舌头中间"裁剪
         if best_box is not None:
-            x1, y1, x2, y2 = map(int, best_box)
-            box_w = x2 - x1
-            box_h = y2 - y1
-            
-            # 向内缩进：横向上取中间 50%，纵向上取中间 50%
-            crop_w_start = x1 + int(box_w * 0.25)
-            crop_w_end = x2 - int(box_w * 0.25)
-            crop_h_start = y1 + int(box_h * 0.25)
-            crop_h_end = y2 - int(box_h * 0.25)
-            
-            tongue_x1, tongue_y1, tongue_x2, tongue_y2 = crop_w_start, crop_h_start, crop_w_end, crop_h_end
+            # 3.1 在 YOLO 框内用颜色重定位舌头主体
+            refined_box = refine_tongue_box(img, best_box)
+
+            # 3.2 融合：用精修框，但如果它异常小则退回原框
+            x1, y1, x2, y2 = map(int, refined_box)
+            bw, bh = x2 - x1, y2 - y1
+            if bw < 30 or bh < 30:
+                x1, y1, x2, y2 = map(int, best_box)
+                bw, bh = x2 - x1, y2 - y1
+
+            # 3.3 按"舌头中间"裁剪：
+            #     横向取中间 60%，纵向取中间 70%
+            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+            crop_w = bw * 0.60
+            crop_h = bh * 0.70
+
+            tongue_x1 = int(max(0, cx - crop_w / 2))
+            tongue_y1 = int(max(0, cy - crop_h / 2))
+            tongue_x2 = int(min(width,  cx + crop_w / 2))
+            tongue_y2 = int(min(height, cy + crop_h / 2))
         else:
-            margin_w, margin_h = int(width * 0.25), int(height * 0.25)
-            tongue_x1, tongue_x2 = margin_w, width - margin_w
-            tongue_y1, tongue_y2 = margin_h, height - margin_h
+            # 没检测到：取图像中心区域
+            cx, cy = width / 2, height / 2
+            tongue_x1 = int(cx - width * 0.25)
+            tongue_x2 = int(cx + width * 0.25)
+            tongue_y1 = int(cy - height * 0.30)
+            tongue_y2 = int(cy + height * 0.30)
 
         tongue_x1, tongue_y1 = max(0, tongue_x1), max(0, tongue_y1)
         tongue_x2, tongue_y2 = min(width, tongue_x2), min(height, tongue_y2)
@@ -650,7 +692,7 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
             cropped_img, coating_ratio, coating_description
         )
 
-        # 6. 可视化框（在原图上画）
+        # 6. 可视化框
         draw_img = img.copy()
         draw = ImageDraw.Draw(draw_img)
         draw.rectangle(
