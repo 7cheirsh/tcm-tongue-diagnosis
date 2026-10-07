@@ -645,18 +645,10 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
             cropped_img, coating_ratio, coating_description
         )
 
-        # 6. 可视化：只画红框（特写区域）
+        # 6. 可视化：只画红框，不写任何文字（避免中文乱码）
         draw_img = img.copy()
         draw = ImageDraw.Draw(draw_img)
-
         draw.rectangle([cx1, cy1, cx2, cy2], outline="#FF2200", width=6)
-        draw.text((cx1, max(0, cy1 - 20)), "Tongue Crop", fill="#FF2200")
-
-        conf_text = f"{best_conf:.2f}" if best_conf > 0 else "0.00"
-        note_text = f"Conf: {conf_text}  (通用检测器，置信度仅供参考)"
-        note_x = max(0, min(cx1, width - 400))
-        note_y = min(height - 20, cy2 + 5)
-        draw.text((note_x, note_y), note_text, fill="#FF2200")
 
         buffered = BytesIO()
         draw_img.save(buffered, format="PNG")
@@ -908,6 +900,7 @@ def analysis_page():
             with col1:
                 st.subheader("🔍 检测定位结果")
                 boxed_placeholder = st.empty()
+                conf_caption_placeholder = st.empty()
             with col2:
                 st.subheader("✂️ 舌体区域特写")
                 tongue_placeholder = st.empty()
@@ -931,6 +924,12 @@ def analysis_page():
                     tongue_placeholder.image(
                         f"data:image/png;base64,{result['tongue_region_base64']}",
                         width=400
+                    )
+
+                    # 用 Streamlit 显示置信度 + 免责说明（中文不会乱码）
+                    conf_val = result.get("人体检测置信度", 0.0)
+                    conf_caption_placeholder.caption(
+                        f"Conf: {conf_val:.2f}　（通用检测器，置信度仅供参考）"
                     )
 
                     if 'coating_img_base64' in result:
