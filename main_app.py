@@ -535,7 +535,6 @@ def onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45):
     outputs = session.run(None, {input_name: blob})
     pred = np.squeeze(outputs[0])
 
-    # 兼容两种输出格式：[8400, 84] 或 [84, 8400]
     if pred.ndim == 2 and pred.shape[0] < pred.shape[1]:
         pred = pred.T
     if pred.ndim != 2 or pred.shape[1] < 5:
@@ -549,7 +548,6 @@ def onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45):
     class_ids = np.argmax(scores, axis=1)
     conf = np.max(scores, axis=1)
 
-    # === 强制置信度落在 0~1 之间 ===
     conf = np.clip(conf, 0.0, 1.0)
 
     mask = conf > conf_thres
@@ -580,7 +578,6 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
         img = Image.open(image_path).convert("RGB")
         width, height = img.size
 
-        # 1. 白平衡（带保护）
         original_img = img.copy()
         if enable_color_correction and CV2_AVAILABLE:
             try:
@@ -596,7 +593,6 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
             except Exception as e:
                 print(f"[WB] 校正异常，跳过: {e}")
 
-        # 2. ONNX 检测（仅用来获取置信度，不画框）
         det_list = onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45)
         best_box, best_conf, all_boxes = None, 0.0, []
 
@@ -612,10 +608,8 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
                 if conf > best_conf:
                     best_conf, best_box = conf, xyxy
 
-        # 置信度再保险一次，必须在 0~1 之间
         best_conf = float(np.clip(best_conf, 0.0, 1.0))
 
-        # 3. 特写区域：整图几何中心正方形（短边 2/3）
         bw, bh = img.size
         crop_size = max(20, min(bw, bh) * 2 // 3)
         ccx, ccy = bw // 2, bh // 2
@@ -630,7 +624,6 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
 
         cropped_img = img.crop((cx1, cy1, cx2, cy2))
 
-        # 4. 舌苔舌质分离
         coating_ratio = None
         coating_description = None
         coating_img_base64 = None
@@ -648,26 +641,22 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
             body_img.save(buffered_body, format="PNG")
             body_img_base64 = base64.b64encode(buffered_body.getvalue()).decode()
 
-        # 5. 提取特征
         tongue_type, confidence, feature_info = extract_tongue_color_features(
             cropped_img, coating_ratio, coating_description
         )
 
-        # 6. 可视化：只画红框（特写区域），去掉蓝框
+        # 6. 可视化：只画红框（特写区域）
         draw_img = img.copy()
         draw = ImageDraw.Draw(draw_img)
 
-        # 红色框：圈住特写区域
         draw.rectangle([cx1, cy1, cx2, cy2], outline="#FF2200", width=6)
         draw.text((cx1, max(0, cy1 - 20)), "Tongue Crop", fill="#FF2200")
 
-        # 红框下方写置信度（自动来自 YOLO，一定在 0~1 之间）
         conf_text = f"{best_conf:.2f}" if best_conf > 0 else "0.00"
-        draw.text(
-            (cx1, min(height - 20, cy2 + 5)),
-            f"Conf: {conf_text}",
-            fill="#FF2200"
-        )
+        note_text = f"Conf: {conf_text}  (通用检测器，置信度仅供参考)"
+        note_x = max(0, min(cx1, width - 400))
+        note_y = min(height - 20, cy2 + 5)
+        draw.text((note_x, note_y), note_text, fill="#FF2200")
 
         buffered = BytesIO()
         draw_img.save(buffered, format="PNG")
@@ -989,6 +978,8 @@ def analysis_page():
                         st.info("分析时间")
                         st.write(result["分析时间"])
                         st.markdown("</div>", unsafe_allow_html=True)
+
+                    st.caption("⚠️ 提示：本系统采用通用目标检测模型进行舌体定位，检测置信度仅供参考；诊断结论仅作辅助，请以专业医师意见为准。")
 
                     tab1, tab2 = st.tabs(["🧠 辩证提示", "💡 智能建议"])
                     with tab1:
