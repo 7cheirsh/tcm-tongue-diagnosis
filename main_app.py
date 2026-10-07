@@ -598,36 +598,39 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
                 if conf > best_conf:
                     best_conf, best_box = conf, xyxy
 
-        # 3. 以 YOLO 框中心为基准，取"舌头中间"裁剪
+        # 3. 先在 YOLO 框内裁剪出"舌体大图"，再在其中取几何中心小块
         if best_box is not None:
             x1, y1, x2, y2 = map(int, best_box)
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(width, x2), min(height, y2)
-            bw, bh = x2 - x1, y2 - y1
-
-            # 取舌头正中间：横向 60%，纵向 60%
-            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-            crop_w = bw * 0.60
-            crop_h = bh * 0.60
-
-            tongue_x1 = int(max(0, cx - crop_w / 2))
-            tongue_y1 = int(max(0, cy - crop_h / 2))
-            tongue_x2 = int(min(width,  cx + crop_w / 2))
-            tongue_y2 = int(min(height, cy + crop_h / 2))
+            if x2 - x1 < 10 or y2 - y1 < 10:
+                x1, y1, x2, y2 = 0, 0, width, height
         else:
-            # 没检测到：取图像中心区域
-            cx, cy = width / 2, height / 2
-            tongue_x1 = int(cx - width * 0.25)
-            tongue_x2 = int(cx + width * 0.25)
-            tongue_y1 = int(cy - height * 0.30)
-            tongue_y2 = int(cy + height * 0.30)
+            x1, y1, x2, y2 = 0, 0, width, height
 
-        tongue_x1, tongue_y1 = max(0, tongue_x1), max(0, tongue_y1)
-        tongue_x2, tongue_y2 = min(width, tongue_x2), min(height, tongue_y2)
-        if tongue_x1 >= tongue_x2: tongue_x2 = tongue_x1 + 10
-        if tongue_y1 >= tongue_y2: tongue_y2 = tongue_y1 + 10
+        # 舌体大图
+        tongue_big = img.crop((x1, y1, x2, y2))
+        bw, bh = tongue_big.size
 
-        cropped_img = img.crop((tongue_x1, tongue_y1, tongue_x2, tongue_y2))
+        # 3.1 几何中心正方形，边长 = min(bw, bh) // 3
+        crop_size = max(10, min(bw, bh) // 3)
+        ccx, ccy = bw // 2, bh // 2
+
+        cx1 = max(0, ccx - crop_size // 2)
+        cy1 = max(0, ccy - crop_size // 2)
+        cx2 = min(bw, ccx + crop_size // 2)
+        cy2 = min(bh, ccy + crop_size // 2)
+
+        if cx2 - cx1 < 10: cx2 = min(bw, cx1 + 10)
+        if cy2 - cy1 < 10: cy2 = min(bh, cy1 + 10)
+
+        cropped_img = tongue_big.crop((cx1, cy1, cx2, cy2))
+
+        # 3.2 换算回"原图坐标系"，用于在检测图上画框
+        tongue_x1 = x1 + cx1
+        tongue_y1 = y1 + cy1
+        tongue_x2 = x1 + cx2
+        tongue_y2 = y1 + cy2
 
         # 4. 舌苔舌质分离
         coating_ratio = None
@@ -1112,11 +1115,11 @@ def history_page():
                 if 'coating_img_base64' in r:
                     col_show1, col_show2 = st.columns(2)
                     with col_show1:
-                        st.caption("舌苔区域")
+                        st.caption("舌苔区域（绿）")
                         coating_data = base64.b64decode(r["coating_img_base64"])
                         st.image(Image.open(BytesIO(coating_data)), width=120)
                     with col_show2:
-                        st.caption("舌质区域")
+                        st.caption("舌质区域（红）")
                         body_data = base64.b64decode(r["body_img_base64"])
                         st.image(Image.open(BytesIO(body_data)), width=120)
 
