@@ -233,7 +233,6 @@ def auto_white_balance(image):
         return image
 
 def advanced_color_correction(image):
-    """温和白平衡：只在明显偏色时才校正，不做 HSV 往返。"""
     if not CV2_AVAILABLE:
         return image
     try:
@@ -536,10 +535,22 @@ def onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45):
     outputs = session.run(None, {input_name: blob})
     pred = np.squeeze(outputs[0])
 
+    # 兼容两种输出格式：[8400, 84] 或 [84, 8400]
+    if pred.ndim == 2 and pred.shape[0] < pred.shape[1]:
+        pred = pred.T
+    if pred.ndim != 2 or pred.shape[1] < 5:
+        print(f"[YOLO] 输出形状异常: {pred.shape}")
+        return []
+
     boxes_xywh = pred[:, :4]
     scores = pred[:, 4:]
+    scores = np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+
     class_ids = np.argmax(scores, axis=1)
     conf = np.max(scores, axis=1)
+
+    # === 强制置信度落在 0~1 之间 ===
+    conf = np.clip(conf, 0.0, 1.0)
 
     mask = conf > conf_thres
     boxes_xywh, conf, class_ids = boxes_xywh[mask], conf[mask], class_ids[mask]
@@ -585,7 +596,7 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
             except Exception as e:
                 print(f"[WB] 校正异常，跳过: {e}")
 
-        # 2. ONNX 检测
+        # 2. ONNX 检测（仅用来获取置信度，不画框）
         det_list = onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45)
         best_box, best_conf, all_boxes = None, 0.0, []
 
@@ -600,6 +611,9 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
             for cls_id, conf, xyxy in det_list:
                 if conf > best_conf:
                     best_conf, best_box = conf, xyxy
+
+        # 置信度再保险一次，必须在 0~1 之间
+        best_conf = float(np.clip(best_conf, 0.0, 1.0))
 
         # 3. 特写区域：整图几何中心正方形（短边 2/3）
         bw, bh = img.size
@@ -639,30 +653,21 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
             cropped_img, coating_ratio, coating_description
         )
 
-        # 6. 可视化框
+        # 6. 可视化：只画红框（特写区域），去掉蓝框
         draw_img = img.copy()
         draw = ImageDraw.Draw(draw_img)
 
-        # 6.1 特写区域红框（对应右边"舌体区域特写"）
+        # 红色框：圈住特写区域
         draw.rectangle([cx1, cy1, cx2, cy2], outline="#FF2200", width=6)
         draw.text((cx1, max(0, cy1 - 20)), "Tongue Crop", fill="#FF2200")
 
-        # 6.2 YOLO 蓝框
-        if best_box is not None:
-            bx1, by1, bx2, by2 = map(int, best_box)
-            bx1, by1 = max(0, bx1), max(0, by1)
-            bx2, by2 = min(width, bx2), min(height, by2)
-        else:
-            bx1, by1, bx2, by2 = cx1, cy1, cx2, cy2
-
-        draw.rectangle([bx1, by1, bx2, by2], outline="#00008B", width=3)
-
-        # 6.3 置信度文字（自动来自 YOLO）
-        conf_text = f"Conf: {best_conf:.2f}" if best_conf > 0 else "Estimated"
-        draw.text((bx1, max(0, by1 - 20)),
-                  f"Tongue Area ({conf_text})", fill="#00008B")
-        draw.text((max(0, cx2 - 120), min(height - 20, cy2 + 5)),
-                  f"Crop ({conf_text})", fill="#FF2200")
+        # 红框下方写置信度（自动来自 YOLO，一定在 0~1 之间）
+        conf_text = f"{best_conf:.2f}" if best_conf > 0 else "0.00"
+        draw.text(
+            (cx1, min(height - 20, cy2 + 5)),
+            f"Conf: {conf_text}",
+            fill="#FF2200"
+        )
 
         buffered = BytesIO()
         draw_img.save(buffered, format="PNG")
