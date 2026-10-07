@@ -233,22 +233,29 @@ def auto_white_balance(image):
         return image
 
 def advanced_color_correction(image):
+    """
+    温和白平衡：只在明显偏色时才校正，不做 HSV 往返（避免图像被搞糊）。
+    """
     if not CV2_AVAILABLE:
         return image
     try:
-        img_wb = auto_white_balance(image)
-        img_array = np.array(img_wb).astype(np.float32) / 255.0
-        hsv = cv2.cvtColor((img_array * 255).astype(np.uint8), cv2.COLOR_RGB2HSV)
-        hsv = hsv.astype(np.float32)
-        sat_mean = np.mean(hsv[:, :, 1])
-        if sat_mean < 100:
-            sat_boost = min(1.3, 120 / (sat_mean + 1))
-            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * sat_boost, 0, 255)
-        hsv = hsv.astype(np.uint8)
-        result = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-        return Image.fromarray(result)
+        img_array = np.array(image).astype(np.float32)
+        r_avg = img_array[:, :, 0].mean()
+        g_avg = img_array[:, :, 1].mean()
+        b_avg = img_array[:, :, 2].mean()
+        gray_avg = (r_avg + g_avg + b_avg) / 3
+
+        # 增益限制在 0.85~1.15，避免过度校正
+        r_gain = np.clip(gray_avg / (r_avg + 1e-6), 0.85, 1.15)
+        g_gain = np.clip(gray_avg / (g_avg + 1e-6), 0.85, 1.15)
+        b_gain = np.clip(gray_avg / (b_avg + 1e-6), 0.85, 1.15)
+
+        img_array[:, :, 0] = np.clip(img_array[:, :, 0] * r_gain, 0, 255)
+        img_array[:, :, 1] = np.clip(img_array[:, :, 1] * g_gain, 0, 255)
+        img_array[:, :, 2] = np.clip(img_array[:, :, 2] * b_gain, 0, 255)
+        return Image.fromarray(img_array.astype(np.uint8))
     except Exception as e:
-        print(f"高级色彩校正失败: {e}")
+        print(f"色彩校正失败: {e}")
         return image
 
 # ===== 舌苔舌质分离功能（彩色叠加版）=====
@@ -264,7 +271,7 @@ def separate_tongue_coating(image):
     try:
         img_array = np.array(image.convert("RGB"))
         H, W = img_array.shape[:2]
-        if H < 20 or W < 20:
+        if H < 5 or W < 5:
             return image, image, 0.5, "图像尺寸或通道异常"
 
         hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
@@ -297,7 +304,7 @@ def separate_tongue_coating(image):
         body_mask = cv2.morphologyEx(body_mask, cv2.MORPH_OPEN, k2)
         body_mask = cv2.morphologyEx(body_mask, cv2.MORPH_CLOSE, k2)
 
-        # 4) 彩色叠加
+        # 4) 彩色叠加（保留原纹理）
         def overlay(color_rgb, mask):
             base = img_array.astype(np.float32)
             color_layer = np.zeros_like(base)
@@ -578,11 +585,26 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
         img = Image.open(image_path).convert("RGB")
         width, height = img.size
 
-        # 1. 白平衡
+        # 1. 白平衡（带保护：校正后差异过大就放弃）
+        original_img = img.copy()
         if enable_color_correction and CV2_AVAILABLE:
-            img = advanced_color_correction(img)
+            try:
+                corrected = advanced_color_correction(img)
+                a1 = np.array(original_img).astype(np.float32)
+                a2 = np.array(corrected).astype(np.float32)
+                if a1.shape == a2.shape:
+                    diff = float(np.mean(np.abs(a1 - a2)))
+                    if diff < 60:
+                        img = corrected
+                        print(f"[WB] 采用校正结果，平均差异={diff:.2f}")
+                    else:
+                        print(f"[WB] 放弃校正，差异过大 diff={diff:.2f}")
+                else:
+                    print("[WB] 尺寸变化，放弃校正")
+            except Exception as e:
+                print(f"[WB] 校正异常，跳过: {e}")
 
-        # 2. ONNX 检测
+        # 2. ONNX 检测（只用来画蓝框，不影响特写）
         det_list = onnx_detect(image_path, conf_thres=0.1, iou_thres=0.45)
         best_box, best_conf, all_boxes = None, 0.0, []
 
@@ -598,22 +620,9 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
                 if conf > best_conf:
                     best_conf, best_box = conf, xyxy
 
-        # 3. 先在 YOLO 框内裁剪出"舌体大图"，再在其中取几何中心小块
-        if best_box is not None:
-            x1, y1, x2, y2 = map(int, best_box)
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(width, x2), min(height, y2)
-            if x2 - x1 < 10 or y2 - y1 < 10:
-                x1, y1, x2, y2 = 0, 0, width, height
-        else:
-            x1, y1, x2, y2 = 0, 0, width, height
-
-        # 舌体大图
-        tongue_big = img.crop((x1, y1, x2, y2))
-        bw, bh = tongue_big.size
-
-        # 3.1 几何中心正方形，边长 = min(bw, bh) // 3
-        crop_size = max(10, min(bw, bh) // 3)
+        # 3. 完全不依赖 YOLO 坐标：整图几何中心取正方形（短边 2/3）
+        bw, bh = img.size
+        crop_size = max(20, min(bw, bh) * 2 // 3)
         ccx, ccy = bw // 2, bh // 2
 
         cx1 = max(0, ccx - crop_size // 2)
@@ -621,16 +630,19 @@ def analyze_tongue(image_path, enable_color_correction=True, enable_coating_sepa
         cx2 = min(bw, ccx + crop_size // 2)
         cy2 = min(bh, ccy + crop_size // 2)
 
-        if cx2 - cx1 < 10: cx2 = min(bw, cx1 + 10)
-        if cy2 - cy1 < 10: cy2 = min(bh, cy1 + 10)
+        if cx2 - cx1 < 20: cx2 = min(bw, cx1 + 20)
+        if cy2 - cy1 < 20: cy2 = min(bh, cy1 + 20)
 
-        cropped_img = tongue_big.crop((cx1, cy1, cx2, cy2))
+        cropped_img = img.crop((cx1, cy1, cx2, cy2))
 
-        # 3.2 换算回"原图坐标系"，用于在检测图上画框
-        tongue_x1 = x1 + cx1
-        tongue_y1 = y1 + cy1
-        tongue_x2 = x1 + cx2
-        tongue_y2 = y1 + cy2
+        # 蓝框仍然画 YOLO 检测框位置（没有就不画）
+        if best_box is not None:
+            bx1, by1, bx2, by2 = map(int, best_box)
+            tongue_x1, tongue_y1 = max(0, bx1), max(0, by1)
+            tongue_x2 = min(width,  bx2)
+            tongue_y2 = min(height, by2)
+        else:
+            tongue_x1, tongue_y1, tongue_x2, tongue_y2 = cx1, cy1, cx2, cy2
 
         # 4. 舌苔舌质分离
         coating_ratio = None
